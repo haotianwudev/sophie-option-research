@@ -7,6 +7,7 @@ be reloaded and compared from a notebook without re-running it.
 
 import itertools
 import json
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -18,6 +19,10 @@ from .backtest import RunResult, StrategyConfig, load_chains, load_features, run
 
 RUNS_PATH = RESULTS_DIR / "runs.parquet"
 TRADES_DIR = RESULTS_DIR / "trades"
+
+# save_run does a read-modify-write of runs.parquet; grid_sweep calls it from
+# parallel threads, so the whole operation must be serialized
+_STORE_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -40,16 +45,17 @@ def save_run(result: RunResult, tag: str = "") -> str:
         "run_at": datetime.now().isoformat(timespec="seconds"),
         **{k: v for k, v in result.metrics.items() if isinstance(v, (int, float))},
     }
-    runs = pd.DataFrame([row])
-    if RUNS_PATH.exists():
-        existing = pd.read_parquet(RUNS_PATH)
-        # Latest run for a hash+tag wins; keep the store deduplicated
-        existing = existing[
-            ~((existing["config_hash"] == row["config_hash"]) & (existing["tag"] == tag))
-        ]
-        runs = pd.concat([existing, runs], ignore_index=True)
-    runs.to_parquet(RUNS_PATH, index=False)
-    result.trade_log.to_parquet(TRADES_DIR / f"{result.config_hash}.parquet", index=False)
+    with _STORE_LOCK:
+        runs = pd.DataFrame([row])
+        if RUNS_PATH.exists():
+            existing = pd.read_parquet(RUNS_PATH)
+            # Latest run for a hash+tag wins; keep the store deduplicated
+            existing = existing[
+                ~((existing["config_hash"] == row["config_hash"]) & (existing["tag"] == tag))
+            ]
+            runs = pd.concat([existing, runs], ignore_index=True)
+        runs.to_parquet(RUNS_PATH, index=False)
+        result.trade_log.to_parquet(TRADES_DIR / f"{result.config_hash}.parquet", index=False)
     return result.config_hash
 
 

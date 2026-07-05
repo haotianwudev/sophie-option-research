@@ -1,0 +1,23 @@
+# Core engine + data
+optopsy==2.2.0
+pandas
+pyarrow
+py7zr            # only needed to convert raw OptionsDX .7z archives
+
+# Market data
+yfinance
+
+# Research / experimentation
+optuna
+joblib
+scikit-learn
+lightgbm
+shap
+quantstats
+matplotlib
+pyyaml
+
+# Notebooks
+ipykernel
+nbconvert
+jupyter_client

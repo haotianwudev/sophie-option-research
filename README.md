@@ -1,55 +1,88 @@
-# optopsy-spx
+# sophie-option-research
 
-Backtest SPX option strategies with [optopsy](https://github.com/michaelchu/optopsy) using free EOD chain data from [OptionsDX](https://www.optionsdx.com/).
+SPX options strategy research platform — a simplified version of an
+industrial quant research workflow, built on
+[optopsy](https://github.com/goldspanlabs/optopsy) 2.2 with free EOD chain
+data from [OptionsDX](https://www.optionsdx.com/) (2010–2023, ~31M contract
+rows) and daily SPX/VIX from Yahoo Finance.
+
+Every stage a hedge-fund options researcher runs, kept lean:
+
+| Stage | Module | Notebook |
+|---|---|---|
+| Data quality | `src/convert_optionsdx.py`, `src/lab/market_data.py` | `01_data_quality` |
+| Features / signals | `src/lab/features.py` (VIX rank, RSI, RV, VRP, trend) | `02_features` |
+| Backtests | `src/lab/backtest.py` (YAML config → optopsy simulate) | `03_baseline_backtests` |
+| Parameter search | `src/lab/experiments.py` (grid + Optuna) | `04_param_sweep` |
+| OOS validation | `src/lab/experiments.py` (walk-forward, IS→OOS decay) | `05_walk_forward` |
+| ML meta-labeling | `src/lab/ml.py` (LightGBM, purged CV, SHAP) | `06_ml_metalabel` |
+| Reporting | `src/lab/report.py` (quantstats tearsheets, regimes) | `07_tearsheet` |
 
 ## Layout
 
 ```
-spx option/          raw OptionsDX .7z yearly/quarterly archives (2010-2022)
-spx_eod_2023/        raw OptionsDX monthly .txt files (2023)
-data/raw/            alternative drop zone for raw files or archives
-data/processed/      converted long-format parquet, one per month (2010-2023, ~31M rows)
-src/convert_optionsdx.py   wide -> long converter (optopsy schema; reads .txt/.csv/.zip/.7z)
-src/run_backtest.py        demo backtests: long calls, short puts, iron condor
-spx_backtest.ipynb         interactive notebook: studies, exits, trade-level plots
+configs/               YAML strategy configs (declarative, hashable, reproducible)
+notebooks/01..07       the research workflow, one notebook per stage
+src/lab/               platform modules (see table above)
+src/convert_optionsdx.py   OptionsDX wide -> optopsy long converter
+data/processed/        chain parquets, one per month (gitignored)
+data/market/           cached Yahoo Finance daily bars (gitignored)
+results/               runs.parquet store + trade logs + HTML tearsheets (gitignored)
 ```
 
 ## Setup
 
 ```powershell
-.venv\Scripts\Activate.ps1     # Python 3.12 venv, already created
-# or recreate: python -m venv .venv; pip install optopsy pandas pyarrow
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 ```
 
-Installed: optopsy 2.2.0, pandas, pyarrow.
+### Getting chain data (free)
 
-## Getting data (free)
+1. Register at [optionsdx.com](https://www.optionsdx.com/), download the SPX
+   EOD yearly bundles ($0) into a folder.
+2. Convert: `python src\convert_optionsdx.py --symbol SPX --raw-dir <folder>`
 
-1. Register a free account at [optionsdx.com](https://www.optionsdx.com/).
-2. Add the **SPX Option Chain — End of Day** yearly bundles ($0) to cart and download.
-3. Drop the `.txt` / `.zip` files into a folder (e.g. `spx_eod_2023/`).
+SPX/VIX daily bars download automatically from Yahoo on first use
+(`lab.market_data.load_market()`).
 
-## Usage
+## Quick start
 
-```powershell
-# Convert raw OptionsDX files to optopsy-ready parquet
-python src\convert_optionsdx.py --symbol SPX --raw-dir spx_eod_2023
+```python
+import sys; sys.path.insert(0, "src")
+from lab.backtest import StrategyConfig, run_backtest
 
-# Run the demo backtests
-python src\run_backtest.py
+cfg = StrategyConfig.from_yaml("configs/short_put_45dte.yaml").replace(
+    start="2022-01-01", end="2023-12-31",
+    entry_filter="vix_rank > 0.5 and rsi14 < 40",   # any expression over the feature matrix
+)
+res = run_backtest(cfg)
+print(res.metrics)          # sharpe, sortino, max_drawdown, win_rate, ...
+res.equity_curve.plot()
 ```
 
-## Notes
+Then work through `notebooks/01` → `07`; each stage feeds the next and every
+run is recorded in `results/runs.parquet` keyed by config hash.
 
-- optopsy requires long format: one row per contract with
-  `underlying_symbol, option_type, expiration, quote_date, strike, bid, ask, delta`
-  (`delta` is mandatory in v2.2; `underlying_price` and `volume` are carried as extras).
-- OptionsDX ships wide format (call + put per row) with bracketed headers
-  (`[QUOTE_DATE]`) — the converter normalizes both, and collapses intraday
-  snapshots to the last one per day if you feed it intraday products.
-- Put deltas stay negative; optopsy filters on `abs(delta)` internally.
-- Per-leg delta targets take dicts: `leg1_delta={"min":0.03,"target":0.10,"max":0.20}`.
+## Research discipline baked in
+
+- **No lookahead**: features use only same-day-close data; entry filters
+  apply to the entry date's features.
+- **Everything reproducible**: a config hash addresses each run and its
+  trade log in the results store.
+- **In-sample honesty**: notebook 04 (tuning) is explicitly labeled
+  in-sample; notebook 05 walk-forward reports the IS→OOS Sharpe decay.
+- **Leak-proof ML**: purged + embargoed time-series CV; a shuffled-label
+  check must return AUC ≈ 0.5; filters are evaluated on out-of-fold trades only.
+
+## optopsy notes
+
+- Chains must be long format: one row per contract with
+  `underlying_symbol, option_type, expiration, quote_date, strike, bid, ask, delta`.
+- Per-leg delta targets take dicts: `leg1_delta={"min":0.2,"target":0.3,"max":0.4}`.
   Bands that are too narrow silently produce zero trades — start wide.
-- Returned stats are grouped by DTE/delta buckets: `count, mean, win_rate,
-  profit_factor`, etc. Pass `raw=True` for trade-level output, or use
-  `op.simulate()` / `op.simulate_portfolio()` for capital-tracked simulations.
+- `stop_loss` is negative (multiple of premium), `take_profit` positive
+  (fraction of max profit). `entry_dates` accepts any
+  `(underlying_symbol, quote_date)` DataFrame — that's how feature-based
+  entry filters plug in.
