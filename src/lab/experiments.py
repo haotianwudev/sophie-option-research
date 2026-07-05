@@ -230,7 +230,11 @@ def walk_forward(
             year += test_years
             continue
         best = ok.iloc[0]
-        best_overrides = {k: best[k] for k in param_grid}
+        # None grid values come back from the DataFrame as NaN; restore them
+        best_overrides = {
+            k: (None if isinstance(best[k], float) and pd.isna(best[k]) else best[k])
+            for k in param_grid
+        }
 
         oos_cfg = _apply_overrides(base.replace(start=te0, end=te1), best_overrides)
         oos = run_backtest(oos_cfg)
