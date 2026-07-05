@@ -1,0 +1,10 @@
+.venv/
+data/raw/
+data/processed/
+data/market/
+results/
+spx_eod_*/
+spx option/
+.ipynb_checkpoints/
+__pycache__/
+*.pyc

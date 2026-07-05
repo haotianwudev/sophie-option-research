@@ -1,0 +1,18 @@
+# ~16-delta short strikes / ~10-delta wings, 45 DTE, entered only in elevated vol
+name: iron_condor_45dte
+strategy: iron_condor
+params:
+  max_entry_dte: 50
+  exit_dte: 21
+  leg1_delta: {min: 0.03, target: 0.10, max: 0.20}   # long put wing
+  leg2_delta: {min: 0.10, target: 0.16, max: 0.30}   # short put
+  leg3_delta: {min: 0.10, target: 0.16, max: 0.30}   # short call
+  leg4_delta: {min: 0.03, target: 0.10, max: 0.20}   # long call wing
+  take_profit: 0.5
+entry_filter: "vix_rank > 0.3"
+start: null
+end: null
+sim:
+  capital: 100000
+  quantity: 1
+  max_positions: 1
