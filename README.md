@@ -17,12 +17,13 @@ Every stage a hedge-fund options researcher runs, kept lean:
 | OOS validation | `src/lab/experiments.py` (walk-forward, IS→OOS decay) | `05_walk_forward` |
 | ML meta-labeling | `src/lab/ml.py` (LightGBM, purged CV, SHAP) | `06_ml_metalabel` |
 | Reporting | `src/lab/report.py` (quantstats tearsheets, regimes) | `07_tearsheet` |
+| Roll management | `src/lab/rolling.py` (delta-triggered offensive/defensive rolls) | `08_rolling` |
 
 ## Layout
 
 ```
 configs/               YAML strategy configs (declarative, hashable, reproducible)
-notebooks/01..07       the research workflow, one notebook per stage
+notebooks/01..08       the research workflow, one notebook per stage
 src/lab/               platform modules (see table above)
 src/convert_optionsdx.py   OptionsDX wide -> optopsy long converter
 data/processed/        chain parquets, one per month (gitignored)
