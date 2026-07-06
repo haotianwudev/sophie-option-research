@@ -7,12 +7,19 @@ volume. The S&P index is stored under symbol "SPX" (same as the chains).
 
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
 from . import CHAIN_DIR, MARKET_DIR
 
-YAHOO_TICKERS = {"SPX": "^GSPC", "VIX": "^VIX"}
+YAHOO_TICKERS = {
+    "SPX": "^GSPC",
+    "VIX": "^VIX",
+    "VIX3M": "^VIX3M",   # 3-month VIX -> term structure slope
+    "PUT": "^PUT",       # CBOE PutWrite index -> strategy benchmark
+    "BXM": "^BXM",       # CBOE BuyWrite index -> strategy benchmark
+}
 DEFAULT_START = "2009-01-01"  # one year of warm-up before the 2010 chain data
 
 
@@ -82,10 +89,26 @@ def spx_from_chains(chain_dir: Path = CHAIN_DIR) -> pd.DataFrame:
 
 
 def load_market(refresh: bool = False) -> pd.DataFrame:
-    """SPX daily bars with VIX close joined on quote_date (column `vix`)."""
+    """SPX daily bars with VIX (`vix`) and VIX3M (`vix3m`) closes joined on quote_date."""
     spx = load_daily("SPX", refresh=refresh)
     vix = load_daily("VIX", refresh=refresh)[["quote_date", "close"]].rename(columns={"close": "vix"})
-    return spx.merge(vix, on="quote_date", how="left")
+    out = spx.merge(vix, on="quote_date", how="left")
+    try:
+        vix3m = load_daily("VIX3M", refresh=refresh)[["quote_date", "close"]].rename(
+            columns={"close": "vix3m"})
+        out = out.merge(vix3m, on="quote_date", how="left")
+    except Exception:   # term structure is optional; features degrade gracefully
+        out["vix3m"] = float("nan")
+    return out
+
+
+def load_benchmark(symbol: str = "PUT", refresh: bool = False) -> Optional[pd.Series]:
+    """Benchmark close series (datetime-indexed) for tearsheets/metrics, or None."""
+    try:
+        df = load_daily(symbol, refresh=refresh)
+    except Exception:
+        return None
+    return df.set_index("quote_date")["close"].rename(symbol)
 
 
 if __name__ == "__main__":

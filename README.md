@@ -17,13 +17,18 @@ Every stage a hedge-fund options researcher runs, kept lean:
 | OOS validation | `src/lab/experiments.py` (walk-forward, IS→OOS decay) | `05_walk_forward` |
 | ML meta-labeling | `src/lab/ml.py` (LightGBM, purged CV, SHAP) | `06_ml_metalabel` |
 | Reporting | `src/lab/report.py` (quantstats tearsheets, regimes) | `07_tearsheet` |
-| Roll management | `src/lab/rolling.py` (delta-triggered offensive/defensive rolls) | `08_rolling` |
+| Roll management | `src/lab/rolling.py` (delta/time-triggered rolls) | `08_rolling` |
+| VRP study | `src/lab/features.py` (vrp_z, chain ATM IV rank, term slope) | `09_vrp_study` |
+| Metrics | `src/lab/metrics.py` (premium capture, ROM, probabilistic Sharpe, benchmarks) | all |
+| Sizing | `src/lab/sizing.py` (fixed / VIX-scaled / fractional Kelly) | `08_rolling` |
+| Publication | `src/lab/db.py` + `src/lab/explain.py` (Sophie Postgres + research memos) | `07_tearsheet` |
 
 ## Layout
 
 ```
 configs/               YAML strategy configs (declarative, hashable, reproducible)
-notebooks/01..08       the research workflow, one notebook per stage
+notebooks/01..09       the research workflow, one notebook per stage
+sql/                   Sophie Postgres schema (option_research_* tables)
 src/lab/               platform modules (see table above)
 src/convert_optionsdx.py   OptionsDX wide -> optopsy long converter
 data/processed/        chain parquets, one per month (gitignored)
@@ -76,6 +81,23 @@ run is recorded in `results/runs.parquet` keyed by config hash.
   in-sample; notebook 05 walk-forward reports the IS→OOS Sharpe decay.
 - **Leak-proof ML**: purged + embargoed time-series CV; a shuffled-label
   check must return AUC ≈ 0.5; filters are evaluated on out-of-fold trades only.
+
+## Publishing results
+
+Studies are published to the Sophie platform's PostgreSQL (same DB as
+investment_clock; credentials resolve from `.env` or
+`F:/workspace/sophie-pipeline/.env`):
+
+```python
+from lab.explain import publish_study
+publish_study("vrp09", hypothesis="...")   # runs + equity curves + memo -> DB
+```
+
+Tables: `option_research_run`, `option_research_equity`,
+`option_research_evaluation` (see `sql/option_research.sql`). The
+`/option-research-explain <tag>` Claude skill writes the AI narrative for a
+study and upserts it into the evaluation table — the GraphQL/frontend layer
+can be added later following the standard Sophie feature pattern.
 
 ## optopsy notes
 

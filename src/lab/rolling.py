@@ -36,7 +36,9 @@ class RollConfig:
     exit_dte: int = 21              # stop managing when the held leg reaches this DTE
     defensive_delta: Optional[float] = None   # roll when |delta| >= this (e.g. 0.50)
     offensive_delta: Optional[float] = None   # roll when |delta| <= this (e.g. 0.12)
-    max_rolls: int = 4              # per campaign, both kinds combined
+    time_roll_dte: Optional[int] = None       # tastylive-style: roll at this DTE...
+    time_roll_same_strike: bool = True        # ...keeping the strike (pure time roll)
+    max_rolls: int = 4              # per campaign, all kinds combined
     min_bid: float = 0.05           # don't sell quotes with no real market
 
     def label(self) -> str:
@@ -45,6 +47,8 @@ class RollConfig:
             parts.append(f"def@{self.defensive_delta}")
         if self.offensive_delta is not None:
             parts.append(f"off@{self.offensive_delta}")
+        if self.time_roll_dte is not None:
+            parts.append(f"time@{self.time_roll_dte}dte")
         return "+".join(parts) if parts else "no-roll"
 
 
@@ -75,6 +79,26 @@ def _select_short_put(day_chain: pd.DataFrame, cfg: RollConfig, quote_date) -> O
     if cands.empty:
         return None
     return cands.iloc[(cands["abs_delta"] - cfg.target_delta).abs().argmin()]
+
+
+def _select_same_strike(
+    day_chain: pd.DataFrame, cfg: RollConfig, quote_date, strike: float
+) -> Optional[pd.Series]:
+    """Pure time roll: same strike, expiration nearest cfg.entry_dte out."""
+    exp_idx = day_chain.index.get_level_values("expiration")
+    k_idx = day_chain.index.get_level_values("strike")
+    dte = (exp_idx - quote_date).days
+    ok = (
+        (k_idx == strike)
+        & (dte >= cfg.entry_dte - cfg.dte_tolerance)
+        & (dte <= cfg.entry_dte + cfg.dte_tolerance)
+        & (day_chain["bid"] >= cfg.min_bid)
+    )
+    cands = day_chain[ok]
+    if cands.empty:
+        return None
+    cand_dte = (cands.index.get_level_values("expiration") - quote_date).days
+    return cands.iloc[np.abs(cand_dte - cfg.entry_dte).argmin()]
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +157,7 @@ def _run_campaign(puts, trading_dates, cfg: RollConfig, entry_date, camp_id):
         return None
 
     legs = []
-    rolls_used = n_def = n_off = 0
+    rolls_used = n_def = n_off = n_time = 0
     max_abs_delta = pick["abs_delta"]
 
     # current leg state
@@ -170,7 +194,9 @@ def _run_campaign(puts, trading_dates, cfg: RollConfig, entry_date, camp_id):
         dte = (expiration - date).days
 
         reason = None
-        if dte <= cfg.exit_dte:
+        if cfg.time_roll_dte is not None and dte <= cfg.time_roll_dte:
+            reason = "time_roll" if rolls_used < cfg.max_rolls else "exit"
+        elif dte <= cfg.exit_dte:
             reason = "exit"
         elif (cfg.defensive_delta is not None and pd.notna(abs_delta)
               and abs_delta >= cfg.defensive_delta and rolls_used < cfg.max_rolls):
@@ -188,11 +214,21 @@ def _run_campaign(puts, trading_dates, cfg: RollConfig, entry_date, camp_id):
         if reason == "exit":
             break
 
-        # roll: open a fresh leg at target delta, ~entry_dte out, same day
+        # roll: open a fresh leg ~entry_dte out, same day
         rolls_used += 1
         n_def += reason == "defensive_roll"
         n_off += reason == "offensive_roll"
-        pick = _select_short_put(puts.loc[date], cfg, date)
+        n_time += reason == "time_roll"
+        day_chain = puts.loc[date]
+        if reason == "time_roll" and cfg.time_roll_same_strike:
+            # pure time roll keeps the strike; fall back to delta targeting
+            # if that strike isn't quoted in the target expiration window
+            pick = (_select_same_strike(day_chain, cfg, date, strike)
+                    if strike is not None else None)
+            if pick is None:
+                pick = _select_short_put(day_chain, cfg, date)
+        else:
+            pick = _select_short_put(day_chain, cfg, date)
         if pick is None:            # nothing to roll into; campaign ends here
             break
         expiration, strike = pick.name[0], pick.name[1]
@@ -212,6 +248,7 @@ def _run_campaign(puts, trading_dates, cfg: RollConfig, entry_date, camp_id):
         "n_legs": len(legs),
         "n_defensive": n_def,
         "n_offensive": n_off,
+        "n_time": n_time,
         "total_credit": sum(l["open_mid"] for l in legs),
         "total_pnl": total_pnl,
         "max_abs_delta": max_abs_delta,
@@ -283,8 +320,10 @@ def summarize_campaigns(camp: pd.DataFrame, name: str = "") -> dict:
         "total_pnl": camp["total_pnl"].sum(),
         "worst_campaign": camp["total_pnl"].min(),
         "max_dd_$": dd,
-        "avg_rolls": (camp["n_defensive"] + camp["n_offensive"]).mean(),
+        "avg_rolls": (camp["n_defensive"] + camp["n_offensive"]
+                      + camp.get("n_time", 0)).mean(),
         "avg_days": camp["days"].mean(),
+        "pnl_per_day": camp["total_pnl"].sum() / max(camp["days"].sum(), 1),
     }
 
 

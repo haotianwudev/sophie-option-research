@@ -148,12 +148,15 @@ def run_backtest(
         kwargs["entry_dates"] = entry_dates
 
     sim = op.simulate(chains, _strategy_fn(config.strategy), **config.sim, **kwargs)
+    from .metrics import compute_run_metrics
+
+    extended = compute_run_metrics(sim.trade_log, sim.equity_curve, features=features)
     return RunResult(
         config=config,
         config_hash=config.hash(),
         trade_log=sim.trade_log,
         equity_curve=sim.equity_curve,
-        metrics=dict(sim.summary),
+        metrics={**sim.summary, **extended},
     )
 
 

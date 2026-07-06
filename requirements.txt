@@ -11,11 +11,17 @@ yfinance
 optuna
 joblib
 scikit-learn
+scipy
 lightgbm
 shap
 quantstats
 matplotlib
 pyyaml
+tabulate          # DataFrame.to_markdown for research memos
+
+# Publication layer (Sophie Postgres)
+psycopg2-binary
+python-dotenv
 
 # Notebooks
 ipykernel
