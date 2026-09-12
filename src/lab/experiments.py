@@ -94,7 +94,7 @@ def grid_sweep(
 
     keys = list(param_grid)
     combos = list(itertools.product(*param_grid.values()))
-    chains = load_chains(base.start, base.end)
+    chains = load_chains(base.start, base.end, source=base.data_source)
     features = load_features()
 
     def one(combo: tuple) -> dict:
@@ -161,7 +161,7 @@ def optuna_search(
     """
     import optuna
 
-    chains = load_chains(base.start, base.end)
+    chains = load_chains(base.start, base.end, source=base.data_source)
     features = load_features()
 
     def objective(trial: "optuna.Trial") -> float:

@@ -4,10 +4,23 @@ A StrategyConfig fully describes one experiment: the optopsy strategy, its
 parameters, an optional entry-filter expression over the feature matrix
 (e.g. "vix_rank > 0.5 and rsi14 < 40"), and simulation settings. Configs are
 hashable so every run is reproducible and addressable in the results store.
+
+Two chain data sources are available (`StrategyConfig.data_source`):
+  "unified" (default) -- data/spx_chain_unified in the sophie-pipeline repo,
+    2010-01 to present (OptionsDX 2010-2023 re-derived with uniform Black-
+    Scholes greeks + the ThetaData gap backfill + the live Cboe ETL, all on
+    one consistent schema). See the spx-option-chain-unify skill.
+  "legacy" -- the original data/processed/*.parquet here (2010-2023 only,
+    OptionsDX's own vendor-computed deltas, unquotable rows dropped at
+    conversion time). Kept for reproducing pre-2026-09 runs exactly; new
+    research should use "unified".
+`data_source` is part of the config hash, so switching it always produces a
+distinctly-addressable run rather than silently reinterpreting an old one.
 """
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -18,7 +31,11 @@ import pandas as pd
 
 from . import CHAIN_DIR
 from .features import build_features, entry_dates_from_expr
-from .market_data import load_market
+from .market_data import load_daily, load_market
+
+UNIFIED_CHAIN_DIR = Path(os.environ.get(
+    "SPX_CHAIN_UNIFIED_DIR", r"F:\workspace\sophie-pipeline\data\spx_chain_unified"
+))
 
 
 @dataclass
@@ -30,6 +47,7 @@ class StrategyConfig:
     start: Optional[str] = None                # slice of chain data, "YYYY-MM-DD"
     end: Optional[str] = None
     sim: dict = field(default_factory=dict)    # capital, quantity, max_positions, selector
+    data_source: str = "unified"               # "unified" (default, 2010-present) or "legacy" (2010-2023 only)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "StrategyConfig":
@@ -43,7 +61,7 @@ class StrategyConfig:
         return {
             "name": self.name, "strategy": self.strategy, "params": self.params,
             "entry_filter": self.entry_filter, "start": self.start, "end": self.end,
-            "sim": self.sim,
+            "sim": self.sim, "data_source": self.data_source,
         }
 
     def hash(self) -> str:
@@ -60,7 +78,7 @@ class StrategyConfig:
         d["params"] = dict(d["params"])
         d["sim"] = dict(d["sim"])
         for key, val in overrides.items():
-            if key in ("name", "strategy", "entry_filter", "start", "end"):
+            if key in ("name", "strategy", "entry_filter", "start", "end", "data_source"):
                 d[key] = val
             elif key in ("params", "sim"):
                 d[key].update(val)
@@ -84,13 +102,15 @@ class RunResult:
 
 
 @lru_cache(maxsize=1)
-def _all_chain_files() -> tuple:
+def _legacy_chain_files() -> tuple:
     return tuple(sorted(CHAIN_DIR.glob("*.parquet")))
 
 
-def load_chains(start: Optional[str] = None, end: Optional[str] = None) -> pd.DataFrame:
-    """Load chain parquets, pre-filtering by month from filenames (spx_eod_YYYYMM)."""
-    files = _all_chain_files()
+def _load_legacy_chains(start: Optional[str], end: Optional[str]) -> pd.DataFrame:
+    """Load data/processed/*.parquet, pre-filtering by month from filenames
+    (spx_eod_YYYYMM). OptionsDX's own vendor-computed deltas, 2010-2023 only,
+    unquotable contracts already dropped at conversion time."""
+    files = _legacy_chain_files()
     if not files:
         raise SystemExit(f"No chain parquets in {CHAIN_DIR}. Run src/convert_optionsdx.py.")
     if start or end:
@@ -103,6 +123,87 @@ def load_chains(start: Optional[str] = None, end: Optional[str] = None) -> pd.Da
     if end:
         df = df[df["quote_date"] <= pd.Timestamp(end)]
     return df.reset_index(drop=True)
+
+
+@lru_cache(maxsize=1)
+def _unified_chain_files() -> tuple:
+    if not UNIFIED_CHAIN_DIR.exists():
+        raise SystemExit(
+            f"No unified chain archive at {UNIFIED_CHAIN_DIR}. Set env var "
+            "SPX_CHAIN_UNIFIED_DIR, or run the spx-option-chain-unify pipeline "
+            "in sophie-pipeline to build it."
+        )
+    return tuple(sorted(UNIFIED_CHAIN_DIR.glob("year=*/month=*/day=*/chain.parquet")))
+
+
+def _load_unified_chains(start: Optional[str], end: Optional[str]) -> pd.DataFrame:
+    """Load data/spx_chain_unified (sophie-pipeline repo), 2010-01 to present,
+    adapted to optopsy's expected wide schema:
+      underlying_symbol, underlying_price, option_type, expiration,
+      quote_date, strike, bid, ask, delta, volume
+
+    Two adaptations the unified schema itself doesn't provide:
+    - underlying_price isn't a column in any of the 3 unified sources (none
+      of OptionsDX/ThetaData/Cboe carry per-row spot) -- joined in from
+      lab.market_data.load_daily("SPX"), which self-refreshes rather than
+      trusting a possibly-stale local cache.
+    - The unified archive deliberately keeps every strike, including
+      worthless/no-quote ones, for archival completeness. The legacy
+      converter drops "unquotable" rows (bid<=0 and ask<=0) at conversion
+      time -- replicated here so both sources feed optopsy the same universe.
+    """
+    files = _unified_chain_files()
+    if not files:
+        raise SystemExit(f"No chain.parquet files found under {UNIFIED_CHAIN_DIR}.")
+
+    start_ts = pd.Timestamp(start) if start else None
+    end_ts = pd.Timestamp(end) if end else None
+
+    selected = []
+    for f in files:
+        parts = dict(p.split("=") for p in f.parts if "=" in p)
+        d = pd.Timestamp(year=int(parts["year"]), month=int(parts["month"]), day=int(parts["day"]))
+        if start_ts and d < start_ts:
+            continue
+        if end_ts and d > end_ts:
+            continue
+        selected.append(f)
+    if not selected:
+        raise ValueError(f"No unified chain files in range {start} -> {end}")
+
+    cols = ["biz_date", "expiration", "strike", "type", "bid", "ask", "delta", "volume"]
+    df = pd.concat((pd.read_parquet(f, columns=cols) for f in selected), ignore_index=True)
+    df = df[(df["bid"] > 0) | (df["ask"] > 0)]
+
+    # optopsy's dtype check wants datetime64[ns]/[us]; parquet's date32
+    # round-trips as datetime64[s] via pyarrow, which it rejects.
+    df["quote_date"] = pd.to_datetime(df["biz_date"]).astype("datetime64[ns]")
+    df["expiration"] = pd.to_datetime(df["expiration"]).astype("datetime64[ns]")
+    df["option_type"] = df["type"].str[0].str.lower()
+    df["underlying_symbol"] = "SPX"
+
+    spot = load_daily("SPX")[["quote_date", "close"]].rename(columns={"close": "underlying_price"})
+    df = df.merge(spot, on="quote_date", how="left")
+    missing_spot = df["underlying_price"].isna().sum()
+    if missing_spot:
+        df = df.dropna(subset=["underlying_price"])
+
+    return df[[
+        "underlying_symbol", "underlying_price", "option_type", "expiration",
+        "quote_date", "strike", "bid", "ask", "delta", "volume",
+    ]].reset_index(drop=True)
+
+
+def load_chains(
+    start: Optional[str] = None, end: Optional[str] = None, source: str = "unified"
+) -> pd.DataFrame:
+    """Load option chain data for optopsy. See module docstring for the two
+    available `source` values."""
+    if source == "unified":
+        return _load_unified_chains(start, end)
+    elif source == "legacy":
+        return _load_legacy_chains(start, end)
+    raise ValueError(f"unknown chain source {source!r} (expected 'unified' or 'legacy')")
 
 
 @lru_cache(maxsize=1)
@@ -138,7 +239,7 @@ def run_backtest(
 ) -> RunResult:
     """Run one capital-tracked simulation described by *config*."""
     if chains is None:
-        chains = load_chains(config.start, config.end)
+        chains = load_chains(config.start, config.end, source=config.data_source)
     if features is None:
         features = load_features()
 
@@ -170,7 +271,7 @@ def run_raw_trades(
     This is the trade universe the ML meta-labeling stage learns from.
     """
     if chains is None:
-        chains = load_chains(config.start, config.end)
+        chains = load_chains(config.start, config.end, source=config.data_source)
     if features is None:
         features = load_features()
 

@@ -12,6 +12,7 @@ params:
 entry_filter: "vix_rank > 0.3"
 start: null
 end: null
+data_source: unified   # spx_chain_unified, 2010-present; use "legacy" to reproduce pre-2026-09 runs
 sim:
   capital: 100000
   quantity: 1

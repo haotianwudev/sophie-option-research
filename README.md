@@ -3,9 +3,17 @@
 SPX options strategy research platform — a simplified but complete version of
 an industrial quant research workflow. Built on
 [optopsy](https://github.com/goldspanlabs/optopsy) 2.2 as the backtest engine,
-free EOD option-chain data from [OptionsDX](https://www.optionsdx.com/)
-(2010–2023, ~31M contract rows), and daily SPX/VIX/benchmark series from Yahoo
-Finance. Python + Jupyter throughout; results publish to the Sophie platform's
+daily SPX/VIX/benchmark series from Yahoo Finance, and (as of 2026-09) the
+unified SPX option chain archive from the sibling `sophie-pipeline` repo
+(`data/spx_chain_unified` there) as the default chain data source — free EOD
+data from [OptionsDX](https://www.optionsdx.com/) (2010-2023, re-derived with
+uniform Black-Scholes greeks) stitched to a ThetaData gap backfill
+(2024-2026-08-20) and the live Cboe ETL (2026-08-21+), so backtests can now
+run continuously from 2010 through the present rather than stopping at 2023.
+The original 2010-2023-only OptionsDX conversion (`data/processed/*.parquet`)
+is kept as `data_source: legacy` for reproducing pre-2026-09 runs exactly —
+see `lab/backtest.py`'s module docstring and the `spx-option-chain-unify`
+skill. Python + Jupyter throughout; results publish to the Sophie platform's
 PostgreSQL.
 
 **What you can research here:** entry filters (VIX rank, RSI, VRP, IV rank,
@@ -45,7 +53,19 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2. Chain data (free, one-time)
+### 2. Chain data
+
+Default (`data_source: unified`, or omit the field — it's the dataclass
+default): point `SPX_CHAIN_UNIFIED_DIR` at the unified archive built by
+`sophie-pipeline`'s `spx-option-chain-unify` pipeline (default path
+`F:\workspace\sophie-pipeline\data\spx_chain_unified`, override via env var if
+your checkout layout differs). `lab/backtest.py` adapts its canonical schema
+to optopsy's expected wide format on the fly (joining in daily SPX closes for
+`underlying_price`, which the unified schema doesn't carry per-row). Nothing
+to convert yourself — that archive is pre-built.
+
+Legacy (`data_source: legacy`, only needed to reproduce a pre-2026-09 run
+exactly, 2010-2023 only):
 
 1. Register at [optionsdx.com](https://www.optionsdx.com/) and download the
    **SPX Option Chain — End of Day** yearly bundles ($0) into a folder.
@@ -234,11 +254,13 @@ configs/                   YAML strategy configs (declarative, hashable)
 notebooks/01..09           the research workflow, one notebook per stage
 sql/option_research.sql    Sophie Postgres schema
 src/lab/                   platform modules (see reference above)
-src/convert_optionsdx.py   OptionsDX wide -> optopsy long converter
+src/convert_optionsdx.py   OptionsDX wide -> optopsy long converter (legacy source only)
 src/run_backtest.py        original CLI demo (predates the platform)
 spx_backtest.ipynb         original exploration notebook (predates the platform)
-data/processed/            chain parquets, one per month   (gitignored)
+data/processed/            legacy chain parquets, one per month, 2010-2023 only (gitignored)
 data/market/               cached Yahoo daily bars          (gitignored)
+                           default chain source is data_source: unified -- lives in the sibling
+                           sophie-pipeline repo (data/spx_chain_unified), not in this repo at all
 results/                   runs.parquet + trade logs + reports (gitignored)
 ```
 
