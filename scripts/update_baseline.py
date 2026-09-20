@@ -3,6 +3,7 @@ available chain data, and save the runs under tag `baseline`.
 
     PYTHONPATH=src ./.venv/Scripts/python.exe scripts/update_baseline.py            # run
     PYTHONPATH=src ./.venv/Scripts/python.exe scripts/update_baseline.py --dry-run  # show the plan only
+    PYTHONPATH=src ./.venv/Scripts/python.exe scripts/update_baseline.py --start 2022-01-01
 
 Why a script and not the notebook: notebook 03 hard-codes END = 2023-12-31, and the only chain
 source that reaches past 2023 is `unified`, so the new runs are pinned to it explicitly. A run over a
@@ -30,7 +31,7 @@ from lab.backtest import StrategyConfig, UNIFIED_CHAIN_DIR, run_backtest  # noqa
 from lab.experiments import load_runs, save_run  # noqa: E402
 
 TAG = "baseline"
-START = "2016-01-01"
+DEFAULT_START = "2016-01-01"   # notebook 03 uses 2016; an earlier set used 2022-01-01 (--start)
 DATA_SOURCE = "unified"
 
 # notebook 03's variants, verbatim
@@ -52,17 +53,17 @@ def latest_chain_date() -> str:
     return max(days)
 
 
-def plan(end: str) -> list[StrategyConfig]:
+def plan(start: str, end: str) -> list[StrategyConfig]:
     base = StrategyConfig.from_yaml(ROOT / "configs" / "short_put_45dte.yaml").replace(
-        start=START, end=end, data_source=DATA_SOURCE)
+        start=start, end=end, data_source=DATA_SOURCE)
     out = [base]
     out += [base.replace(name=f"short_put|{label}", entry_filter=expr) for label, expr in FILTERS.items()]
     out.append(StrategyConfig.from_yaml(ROOT / "configs" / "iron_condor_45dte.yaml").replace(
-        start=START, end=end, data_source=DATA_SOURCE))
+        start=start, end=end, data_source=DATA_SOURCE))
     return out
 
 
-def truncation_check(res, end: str) -> list[str]:
+def truncation_check(res, start: str, end: str) -> list[str]:
     """Flag a run whose trades stop suspiciously early or leave a whole year empty."""
     t = res.trade_log
     if t is None or t.empty:
@@ -73,7 +74,7 @@ def truncation_check(res, end: str) -> list[str]:
     if gap > 75:  # 45-DTE entries + a 21-DTE exit means the tail can legitimately trail by ~2 months
         warns.append(f"last exit {last_exit.date()} is {gap} days before the window end {end}")
     per_year = pd.to_datetime(t["entry_date"]).dt.year.value_counts()
-    full_years = range(int(START[:4]), int(end[:4]))
+    full_years = range(int(start[:4]), int(end[:4]))
     empty = [y for y in full_years if per_year.get(y, 0) == 0]
     if empty:
         warns.append(f"no entries in {empty}")
@@ -83,12 +84,14 @@ def truncation_check(res, end: str) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--start", default=DEFAULT_START, help="window start; each start is its own study")
     args = ap.parse_args()
 
     end = latest_chain_date()
-    configs = plan(end)
+    start = args.start
+    configs = plan(start, end)
     existing = set(load_runs(TAG)["config_hash"]) if not load_runs(TAG).empty else set()
-    print(f"window {START} .. {end}   source={DATA_SOURCE}   tag={TAG}", flush=True)
+    print(f"window {start} .. {end}   source={DATA_SOURCE}   tag={TAG}", flush=True)
     for c in configs:
         state = "already in store, will skip" if c.hash() in existing else "to run"
         print(f"  {c.hash()}  {c.name:32s} {state}", flush=True)
@@ -109,7 +112,7 @@ def main() -> int:
             continue
         save_run(res, tag=TAG)
         m = res.metrics
-        warns = truncation_check(res, end)
+        warns = truncation_check(res, start, end)
         print(f"   saved {res.config_hash} in {time.time() - t0:.0f}s | trades {int(m.get('total_trades', 0))} "
               f"| sharpe {m.get('sharpe_ratio', float('nan')):.2f} | win {m.get('win_rate', float('nan')):.0%}", flush=True)
         for w in warns:
