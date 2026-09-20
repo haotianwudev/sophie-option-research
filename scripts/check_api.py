@@ -66,8 +66,9 @@ kind = lambda t, w: studies[(t, w)]["kind"]
 check("sweep04 is a grid", kind("sweep04", W16) == "grid")
 check("mgmt04 is a grid", kind("mgmt04", "2022-06-01..2023-12-31") == "grid")
 check("optuna04 is a scatter", kind("optuna04", W16) == "scatter")
-check("wf_oos is ONE walk-forward study of 10", kind("wf_oos", "walk-forward") == "walk_forward"
-      and studies[("wf_oos", "walk-forward")]["n_runs"] == 10)
+wf_starts = raw[raw.tag == "wf_oos"][["start", "end"]].astype(str).agg("..".join, axis=1)
+check("wf_oos is ONE walk-forward study with a distinct window per run", kind("wf_oos", "walk-forward") == "walk_forward"
+      and studies[("wf_oos", "walk-forward")]["n_runs"] == len(wf_starts) >= 10 and wf_starts.is_unique)
 check("study run counts sum to the strategy total", sum(s["n_runs"] for s in studies.values()) == st[SP]["n_runs"])
 
 # -- grid pivot vs the store read directly (verification 4)

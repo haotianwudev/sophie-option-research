@@ -25,7 +25,7 @@ export function StudyExplorer({ params, initial }: { params: StudyParams; initia
   const [error, setError] = useState<string | null>(null);
   const [empty, setEmpty] = useState<Cell | null>(null);
   const [copied, setCopied] = useState(false);
-  const first = useRef(true);
+  const loaded = useRef(JSON.stringify([initial.x.key, initial.y?.key ?? null, initial.metric, {}]));
 
   const numeric = params.varying.filter((v) => v.kind !== "categorical");
 
@@ -46,12 +46,14 @@ export function StudyExplorer({ params, initial }: { params: StudyParams; initia
   }, [x, y, metric, pins, params.strategy, params.tag, params.window]);
 
   useEffect(() => {
-    if (first.current) {
-      first.current = false; // the server already rendered `initial`
-      return;
-    }
+    // The server already rendered `initial`, so only fetch when the controls differ from what is on screen.
+    // Comparing to the last-loaded key (not a one-shot flag) keeps this correct when React StrictMode runs
+    // effects twice in development, which otherwise refetches on mount and flashes the dimmed state.
+    const key = JSON.stringify([x, y, metric, pins]);
+    if (key === loaded.current) return;
+    loaded.current = key;
     void load();
-  }, [load]);
+  }, [load, x, y, metric, pins]);
 
   const setAxis = (which: "x" | "y", key: string) => {
     if (which === "x") {
