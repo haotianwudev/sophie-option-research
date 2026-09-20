@@ -12,16 +12,36 @@ and a `baseline` (tag, window) holds two strategies.
 
 from __future__ import annotations
 
+import threading
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import availability as av
 from . import readmodel as rm
 from .memo import EngineUnavailable, study_memo
 
 UI_PORT = 3010
-app = FastAPI(title="sophie option research viewer", version="0.1.0")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # The chain-archive scan reads ~4k files (10-20 s). Do it in the background at startup so the first
+    # request to /api/data/availability is not the one that pays for it.
+    threading.Thread(target=lambda: _warm(), daemon=True).start()
+    yield
+
+
+def _warm() -> None:
+    try:
+        av.availability()
+    except Exception:  # a missing archive is reported by the endpoint itself; never block startup
+        pass
+
+
+app = FastAPI(title="sophie option research viewer", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[f"http://localhost:{UI_PORT}", f"http://127.0.0.1:{UI_PORT}"],
@@ -45,6 +65,12 @@ async def _bad_request(_, exc: rm.BadRequest):
 @app.get("/api/health")
 def health():
     return rm.health()
+
+
+@app.get("/api/data/availability")
+def data_availability():
+    """Coverage, content and freshness of the raw SPX option-chain archive (see lab/api/availability.py)."""
+    return av.availability()
 
 
 @app.get("/api/strategies")

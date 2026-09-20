@@ -17,6 +17,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 
 from lab.api.app import app
+from lab import MARKET_DIR
 from lab.api import readmodel as rm
 
 c = TestClient(app)
@@ -50,8 +51,9 @@ check("strategy run counts match store",
 src = h["data_sources"]
 check("every run's data source is proven by its config hash (none unknown)",
       "unknown" not in src and sum(src.values()) == len(raw), str(src))
-check("the five September reruns are the unified ones",
-      src.get("unified") == 5 and src.get("legacy") == len(raw) - 5, str(src))
+# 102 runs pre-date the data_source field (legacy). Every run made since is unified and can grow over time.
+check("the 102 pre-2026-09-12 runs are legacy and every later run is unified",
+      src.get("legacy") == 102 and src.get("unified") == len(raw) - 102, str(src))
 KEYS = ["strategy", "tag", "start", "end", "entry_filter", "params_json"]
 tw = raw[raw.duplicated(KEYS, keep=False)]
 pairs_differ = all(len({get(f"/api/runs/{x}").json()["data_source"] for x in g.config_hash}) == 2
@@ -142,6 +144,37 @@ check("unknown study -> 404", c.get(f"/api/strategies/{SP}/studies/nope/x/params
 lo = get(f"/api/strategies/{SP}/studies/mgmt04/2022-06-01..2023-12-31/grid", params=[("x", "exit_dte")]).json()
 check("single-axis request on a 2-param study still returns a grid", lo["kind"] == "grid")
 check("filter_set study has no grid view", c.get(f"/api/strategies/{SP}/studies/vrp09/2022-01-01..2023-12-31/grid").status_code == 400)
+
+# -- data availability monitor -------------------------------------------------------------------------------
+import glob
+av_raw = get("/api/data/availability")
+check("availability endpoint responds with strict JSON", av_raw.status_code == 200, av_raw.text[:100])
+av = av_raw.json()
+files = sorted(glob.glob(str(rm.RESULTS_DIR.parent.parent / "sophie-pipeline" / "data" / "spx_chain_unified" / "year=*" / "month=*" / "day=*" / "chain.parquet")))
+check("archive file count equals an independent glob", av["archive"]["n_files"] == len(files), f"{av['archive']['n_files']} vs {len(files)}")
+day = lambda f: "-".join(part.split("=")[1] for part in f.replace("\\", "/").split("/")[-4:-1])
+have = {day(f) for f in files}
+check("archive last date equals the newest day directory", av["archive"]["last"] == max(have))
+check("computed NYSE calendar agrees with every cached SPX price day", av["calendar"]["validated"] is True, str(av["calendar"]))
+# INDEPENDENT oracle: the cached SPX prices say which days really traded, with no calendar code involved
+px = pd.read_parquet(MARKET_DIR / "spx_daily.parquet", columns=["quote_date"])["quote_date"]
+traded = {d.strftime("%Y-%m-%d") for d in px if pd.Timestamp("2010-01-04") <= d <= pd.Timestamp(av["calendar"]["to"])}
+lo, hi = "2010-01-04", av["calendar"]["to"]
+want_gaps = sorted(d for d in traded if d not in have)
+got_gaps = [d for d in av["coverage"]["missing_sessions"] if lo <= d <= hi]
+check("reported gaps equal (days SPX traded) minus (days with a chain file), oracle-checked", want_gaps == got_gaps,
+      f"{len(want_gaps)} vs {len(got_gaps)}")
+want_closed = sorted(d for d in have if lo <= d <= hi and d not in traded)
+got_closed = [d for d in av["coverage"]["files_on_non_sessions"] if lo <= d <= hi]
+check("files on closed days equal (chain days) minus (days SPX traded), oracle-checked", want_closed == got_closed,
+      f"{len(want_closed)} vs {len(got_closed)}")
+check("gaps are only reported before the newest file", all(d < av["archive"]["last"] for d in av["coverage"]["missing_sessions"]))
+check("freshness lists only sessions after the newest file", all(d > av["freshness"]["latest_chain"] for d in av["freshness"]["sessions_since"])
+      and av["freshness"]["lag_sessions"] == len(av["freshness"]["sessions_since"]))
+check("year rows add up to the coverage totals", sum(y["expected"] for y in av["years"]) == av["coverage"]["expected_sessions"]
+      and sum(y["present"] for y in av["years"]) == av["coverage"]["present_sessions"])
+check("source segments tile the archive with no overlap or hole",
+      sum(x["days"] for x in av["segments"]) == av["archive"]["n_files"])
 
 # -- read-only + no engine on the browse path
 check("API exposes no write verbs", all(m == {"GET", "HEAD"} or m <= {"GET", "HEAD", "OPTIONS"}
