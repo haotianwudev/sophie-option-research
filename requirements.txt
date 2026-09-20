@@ -27,3 +27,7 @@ python-dotenv
 ipykernel
 nbconvert
 jupyter_client
+
+# local research viewer API (src/lab/api) -- versions match sophie-pipeline pins
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.32,<0.33
