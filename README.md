@@ -64,6 +64,11 @@ to optopsy's expected wide format on the fly (joining in daily SPX closes for
 `underlying_price`, which the unified schema doesn't carry per-row). Nothing
 to convert yourself — that archive is pre-built.
 
+**Keeping it current:** the unified archive is a local copy of the live GCS capture and is *not* updated
+automatically. The viewer's **Data availability** page shows how many sessions behind it is, the gaps, and
+each day's contents. `sophie-pipeline/docs/spx-chain-local-sync.md` has the manual pull-and-reshape steps and
+the proposed automated sync.
+
 Legacy (`data_source: legacy`, only needed to reproduce a pre-2026-09 run
 exactly, 2010-2023 only):
 
