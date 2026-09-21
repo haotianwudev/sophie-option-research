@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { ApiProblem, attempt } from "@/components/ApiProblem";
+import { DataSummary } from "@/components/DataSummary";
+import type { Availability } from "@/lib/availability-types";
 import { apiGet, type Health, type StrategySummary } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
@@ -7,6 +9,9 @@ export const dynamic = "force-dynamic";
 export default async function Home() {
   const [strategies, err] = await attempt(apiGet<StrategySummary[]>("/api/strategies"));
   const [health] = await attempt(apiGet<Health>("/api/health"));
+  // Short timeout: the first availability call after an API restart scans the whole archive (~10-20 s), and the
+  // home page must not wait for that. A timeout renders "still checking" instead.
+  const [avail] = await attempt(apiGet<Availability>("/api/data/availability", { signal: AbortSignal.timeout(4000) }));
   if (err || !strategies) return <ApiProblem error={err ?? "no data"} />;
 
   return (
@@ -18,6 +23,8 @@ export default async function Home() {
           unit inside which runs can be compared.
         </p>
       </div>
+
+      <DataSummary a={avail} />
 
       <ul className="grid gap-3 sm:grid-cols-2">
         {strategies.map((s) => (
