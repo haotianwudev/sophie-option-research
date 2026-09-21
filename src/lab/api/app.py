@@ -16,14 +16,37 @@ import threading
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from . import availability as av
 from . import readmodel as rm
+from . import removal
 from .memo import EngineUnavailable, study_memo
 
 UI_PORT = 3010
+ALLOWED_ORIGINS = [f"http://localhost:{UI_PORT}", f"http://127.0.0.1:{UI_PORT}"]
+# Paths that change state. Everything else is GET and read-only. check_api.py asserts this list is exactly right.
+MUTATING = [("POST", "/api/runs/{h}/remove"), ("POST", "/api/removed/{h}/restore"), ("POST", "/api/removed/{h}/purge")]
+
+
+def guard(request: Request) -> None:
+    """Protect the mutating routes. This server has no auth and listens on loopback, but a web page open in the
+    same browser can still fire a 'simple' cross-site POST at 127.0.0.1 (CORS stops it being READ, not sent). A
+    custom header forces a preflight that only this UI's origin passes, and the Origin is checked here as well."""
+    if request.headers.get("x-viewer-action") != "1":
+        raise HTTPException(403, "missing X-Viewer-Action header")
+    if request.headers.get("origin") not in ALLOWED_ORIGINS:
+        raise HTTPException(403, "origin not allowed")
+
+
+class RemoveBody(BaseModel):
+    reason: str = ""
+
+
+class PurgeBody(BaseModel):
+    confirm: str
 
 
 @asynccontextmanager
@@ -44,8 +67,8 @@ def _warm() -> None:
 app = FastAPI(title="sophie option research viewer", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[f"http://localhost:{UI_PORT}", f"http://127.0.0.1:{UI_PORT}"],
-    allow_methods=["GET"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -54,6 +77,12 @@ app.add_middleware(
 async def _not_found(_, exc: rm.NotFound):
     from fastapi.responses import JSONResponse
     return JSONResponse({"detail": str(exc)}, status_code=404)
+
+
+@app.exception_handler(rm.Conflict)
+async def _conflict(_, exc: rm.Conflict):
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"detail": str(exc)}, status_code=409)
 
 
 @app.exception_handler(rm.BadRequest)
@@ -122,6 +151,26 @@ def runs(strategy: Optional[str] = None, tag: Optional[str] = None,
 @app.get("/api/runs/{h}")
 def run(h: str):
     return rm.run(h)
+
+
+@app.get("/api/removed")
+def removed_runs():
+    return removal.listing()
+
+
+@app.post("/api/runs/{h}/remove", dependencies=[Depends(guard)])
+def remove_run(h: str, body: RemoveBody = RemoveBody()):
+    return removal.remove(h, body.reason)
+
+
+@app.post("/api/removed/{h}/restore", dependencies=[Depends(guard)])
+def restore_run(h: str):
+    return removal.restore(h)
+
+
+@app.post("/api/removed/{h}/purge", dependencies=[Depends(guard)])
+def purge_run(h: str, body: PurgeBody):
+    return removal.purge(h, body.confirm)
 
 
 @app.get("/api/runs/{h}/trades")

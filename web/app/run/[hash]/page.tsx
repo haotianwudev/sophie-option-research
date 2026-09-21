@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ApiProblem, attempt } from "@/components/ApiProblem";
 import { EquityChart } from "@/components/EquityChart";
 import { MetricTiles } from "@/components/MetricTiles";
+import { RemoveRunButton } from "@/components/RemoveRunButton";
 import { RegimeTable } from "@/components/RegimeTable";
 import { TradeTable } from "@/components/TradeTable";
 import { apiGet, studyHref, type RunDetail } from "@/lib/api";
@@ -41,7 +42,10 @@ export default async function RunPage({ params }: { params: Promise<{ hash: stri
           <Link href={`/s/${encodeURIComponent(run.strategy)}`} className="underline decoration-hair underline-offset-2">{run.strategy.replace(/_/g, " ")}</Link> /{" "}
           <Link href={studyHref(study)} className="underline decoration-hair underline-offset-2">{study.tag} · {study.window}</Link> /
         </p>
-        <h1 className="text-2xl font-semibold">{headline(run.params, run.entry_filter) || run.name}</h1>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <h1 className="text-2xl font-semibold">{headline(run.params, run.entry_filter) || run.name}</h1>
+          <RemoveRunButton hash={run.hash} backHref={studyHref(study)} />
+        </div>
         <p className="tnum mt-1 text-sm text-ink2">
           {run.name.split("|")[0]} · {run.hash} · window {run.window} · tag {run.tags.join(", ")} · run {run.run_at.replace("T", " ")}
         </p>

@@ -178,8 +178,12 @@ check("source segments tile the archive with no overlap or hole",
       sum(x["days"] for x in av["segments"]) == av["archive"]["n_files"])
 
 # -- read-only + no engine on the browse path
-check("API exposes no write verbs", all(m == {"GET", "HEAD"} or m <= {"GET", "HEAD", "OPTIONS"}
-      for m in [set(r.methods) for r in app.routes if hasattr(r, "methods") and r.path.startswith("/api")]))
+from lab.api.app import MUTATING
+check("only the three removal routes can change state (everything else is GET); see check_removal.py",
+      sorted((m, r.path) for r in app.routes if hasattr(r, "methods") and r.path.startswith("/api")
+             for m in r.methods if m not in ("GET", "HEAD", "OPTIONS")) == sorted(MUTATING))
+check("a state-changing call is refused without the browser guard headers",
+      c.post("/api/runs/000000000000/remove", json={}).status_code == 403)
 check("browse path never imported optopsy", "optopsy" not in sys.modules)
 
 print(f"\n{len(fails)} failed" if fails else "\nall checks passed")

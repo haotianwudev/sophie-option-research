@@ -80,6 +80,10 @@ class NotFound(LookupError):
     """A hash, study or column that is not in the store."""
 
 
+class Conflict(RuntimeError):
+    """A change that cannot be made in the current state (e.g. the store changed underneath us)."""
+
+
 class BadRequest(ValueError):
     """A request that names an axis, metric or value the study does not have."""
 
@@ -129,9 +133,32 @@ class Store:
     P: pd.DataFrame             # axis-eligible params (band edges dropped) + entry_filter
     metric_cols: list[str]
     mtime_ns: int
+    key: tuple = (0, 0)      # (runs.parquet mtime, removed_runs.json mtime): the cache is valid while it holds
+    n_hidden: int = 0        # runs hidden by removal
 
 
 _cache: Optional[Store] = None
+
+# Runs the user removed from the viewer. A sidecar file, so runs.parquet is not touched by a soft remove.
+REMOVED_PATH = RESULTS_DIR / "removed_runs.json"
+
+
+def read_tombstones() -> list[dict]:
+    """The removed-run records. A missing file means none; an unreadable one is an error, never 'none' --
+    treating a corrupt file as empty would quietly un-hide every removed run."""
+    try:
+        return json.loads(REMOVED_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+
+
+def invalidate() -> None:
+    global _cache
+    _cache = None
+
+
+def _store_key() -> tuple:
+    return (RUNS_PATH.stat().st_mtime_ns, REMOVED_PATH.stat().st_mtime_ns if REMOVED_PATH.exists() else 0)
 
 
 def _flatten(params_json: str) -> dict[str, Any]:
@@ -180,10 +207,14 @@ def load() -> Store:
     if not RUNS_PATH.exists():
         raise NotFound(f"no results store at {RUNS_PATH}")
     mtime = RUNS_PATH.stat().st_mtime_ns
-    if _cache is not None and _cache.mtime_ns == mtime:
+    key = _store_key()
+    if _cache is not None and _cache.key == key:
         return _cache
 
     runs = pd.read_parquet(RUNS_PATH)
+    hidden = {t["hash"] for t in read_tombstones()}
+    n_hidden = int(runs["config_hash"].isin(hidden).sum())
+    runs = runs[~runs["config_hash"].isin(hidden)].reset_index(drop=True)   # index is rebuilt: P below is built from it
     for c in ("entry_filter", "start", "end"):
         runs[c] = runs[c].where(runs[c].notna() & (runs[c] != ""), None)
     runs["window"] = [f"{s or '..'}..{e or '..'}" if (s or e) else "all"
@@ -208,7 +239,7 @@ def load() -> Store:
     numeric = [c for c in runs.columns
                if c not in META_COLS and c not in DERIVED_COLS
                and pd.api.types.is_numeric_dtype(runs[c])]
-    _cache = Store(runs=runs, P=P, metric_cols=numeric, mtime_ns=mtime)
+    _cache = Store(runs=runs, P=P, metric_cols=numeric, mtime_ns=mtime, key=key, n_hidden=n_hidden)
     return _cache
 
 
@@ -307,7 +338,7 @@ def health() -> dict[str, Any]:
     s = load()
     src = s.runs["data_source"].fillna("unknown").value_counts().to_dict()
     return clean({
-        "store": str(RUNS_PATH), "n_runs": len(s.runs), "n_metrics": len(s.metric_cols),
+        "store": str(RUNS_PATH), "n_runs": len(s.runs), "n_removed": s.n_hidden, "n_metrics": len(s.metric_cols),
         "data_sources": src,
         "mtime": datetime.fromtimestamp(s.mtime_ns / 1e9).isoformat(timespec="seconds"),
         "n_trade_logs": len(list(TRADES_DIR.glob("*.parquet"))) if TRADES_DIR.exists() else 0,

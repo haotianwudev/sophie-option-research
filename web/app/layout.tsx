@@ -16,8 +16,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
             <div className="flex items-baseline gap-3">
               <Link href="/" className="text-base font-semibold">Option research</Link>
-              <span className="text-xs text-ink2">local · read-only</span>
+              <span className="text-xs text-ink2">local · removals are reversible</span>
               <Link href="/data" className="ml-3 text-sm underline decoration-hair underline-offset-2">Data availability</Link>
+              <Link href="/removed" className="text-sm underline decoration-hair underline-offset-2">Removed runs</Link>
             </div>
             <ThemeToggle />
           </div>

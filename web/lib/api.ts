@@ -23,6 +23,43 @@ export async function apiGet<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** State-changing call. The custom header is what the API requires (with an allowed Origin) — it makes the
+ *  browser preflight the request, so a page on another site cannot trigger it. */
+export async function apiPost<T>(path: string, body: unknown = {}): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Viewer-Action": "1" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const j = await res.json();
+      detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+    } catch {
+      /* keep statusText */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return res.json() as Promise<T>;
+}
+
+export interface RemovedRun {
+  hash: string;
+  name: string;
+  strategy: string;
+  tag: string;
+  window: string;
+  reason: string;
+  removed_at: string;
+  in_store: boolean;
+  has_trade_log: boolean;
+  total_trades: number | null;
+  sharpe_ratio: number | null;
+  run_at: string | null;
+}
+
 export type Level = number | string | null;
 export type Kind = "grid" | "scatter" | "line" | "filter_set" | "walk_forward" | "single";
 
